@@ -1,0 +1,48 @@
+name: Remote Access (macOS runner with zrok + tmate)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  remote-access:
+    runs-on: macos-latest
+    timeout-minutes: 180
+    env:
+      ZROK_PORT: 5900
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure start.sh is executable
+        run: |
+          chmod +x ./files/start.sh
+
+      - name: Start zrok + enable Screen Sharing (background)
+        # We start the script in the background. The script will wait for tmate (up to 120s)
+        env:
+          ZROK_TOKEN: ${{ secrets.ZROK_TOKEN }}
+          REMOTE_PASS: ${{ secrets.REMOTE_PASS }}
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+          REMOTE_USER: remote
+        run: |
+          nohup ./files/start.sh &> /tmp/start.sh.log &
+          echo $! > /tmp/start.sh.pid
+          echo "start.sh started in background (pid=$(cat /tmp/start.sh.pid)). Logs: /tmp/start.sh.log"
+
+      - name: Start tmate session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          # defaults are fine; this action prints tmate session details to workflow logs
+          continue-on-error: false
+
+      - name: Collect zrok endpoint and logs
+        if: always()
+        run: |
+          echo "==== /tmp/zrok.log ===="
+          sudo cat /tmp/zrok.log || true
+          echo "==== /tmp/start.sh.log (last 200 lines) ===="
+          tail -n 200 /tmp/start.sh.log || true
+          if [ -f /tmp/zrok.pid ]; then
+            echo "zrok pid: $(cat /tmp/zrok.pid)"
+          fi
