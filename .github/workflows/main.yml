@@ -1,39 +1,41 @@
-name: MacRDP
+name: MacRDP-Zrok
 on: 
   workflow_dispatch:
+
 jobs:
   build:
-    name: MacRDP
     runs-on: macos-latest
-    
-    steps:                 
-    - name: Setup Remote Desktop and zrok
-      env:
-        ZROK_TOKEN: ${{ secrets.ZROK_TOKEN }}
-      run: |
-          # 1. Aktivace vzdálené plochy (ARD)
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on \
-            -privs -all -grant -all -clientopts -setvncpassword -vncpassword "heslo123" \
-            -restart -agent
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-          # 2. Instalace zrok přímo z binárky (obchází Homebrew i Git heslo)
-          curl -L https://github.com -o zrok.tar.gz
-          tar -xzf zrok.tar.gz
-          chmod +x zrok
-          sudo mv zrok /usr/local/bin/
-
-          # 3. Aktivace zrok
-          zrok enable $ZROK_TOKEN
-
-          # 4. Spuštění tunelu na pozadí (pro VNC port 5900)
-          # Výstup se uloží do souboru zrok.log, kde najdete adresu
-          nohup zrok share public localhost:5900 --backend-mode tcp > zrok.log 2>&1 &
+      - name: Setup Remote Desktop and Zrok
+        env:
+          ZROK_TOKEN: ${{ secrets.ZROK_TOKEN }}
+          REMOTE_USER: runneradmin
+          REMOTE_PASS: P@ssw0rd!123  # Změňte si podle sebe
+          VNC_PASSWORD: runnerrdp
+        run: |
+          # Vytvoření skriptu start.sh přímo v běhu (vložíte kód, který jste mi poslal)
+          cat << 'EOF' > start.sh
+          ${{ volitelný_obsah_vašeho_skriptu_výše }}
+          EOF
           
-          echo "Čekám na vygenerování adresy..."
-          sleep 10
-          grep -o "tcp://[a-zA-Z0-9.-]*:[0-9]*" zrok.log || echo "Adresa se zatím neobjevila, zkontrolujte log v tmate."
+          # Spuštění skriptu
+          chmod +x start.sh
+          ./start.sh
 
-    - name: MacOS System running (tmate)
-      uses: mxschmitt/action-tmate@v2
+      - name: Display Connection Info
+        run: |
+          echo "=========================================="
+          echo "Username: runneradmin"
+          echo "Password: P@ssw0rd!123"
+          echo "VNC Password: runnerrdp"
+          echo "Zkontrolujte logy výše pro 'Remote endpoint' (tcp://...)"
+          echo "=========================================="
+
+      - name: Start Tmate Session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: false
 
