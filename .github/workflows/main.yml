@@ -7,18 +7,33 @@ jobs:
     runs-on: macos-latest
     
     steps:                 
-    - name: Enabling Remote Access
+    - name: Setup Remote Desktop and zrok
       env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        ZROK_TOKEN: ${{ secrets.ZROK_TOKEN }}
       run: |
-          curl -s -o start.sh -L "https://github.com/DanzoCZ/rdp/blob/main/.github/workflows/start.sh"
-          chmod +x start.sh
-          bash start.sh "$NGROK_AUTH_TOKEN"
+          # 1. Aktivace vzdálené plochy (ARD)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -privs -all -grant -all -clientopts -setvncpassword -vncpassword "heslo123" \
+            -restart -agent
+
+          # 2. Instalace zrok přímo z binárky (obchází Homebrew i Git heslo)
+          curl -L https://github.com -o zrok.tar.gz
+          tar -xzf zrok.tar.gz
+          chmod +x zrok
+          sudo mv zrok /usr/local/bin/
+
+          # 3. Aktivace zrok
+          zrok enable $ZROK_TOKEN
+
+          # 4. Spuštění tunelu na pozadí (pro VNC port 5900)
+          # Výstup se uloží do souboru zrok.log, kde najdete adresu
+          nohup zrok share public localhost:5900 --backend-mode tcp > zrok.log 2>&1 &
           
-    - name: Log In Details To VNC Server
-      run: |
-         chmod +x login.sh
-         bash login.sh
-         
-    - name: MacOS System running...
+          echo "Čekám na vygenerování adresy..."
+          sleep 10
+          grep -o "tcp://[a-zA-Z0-9.-]*:[0-9]*" zrok.log || echo "Adresa se zatím neobjevila, zkontrolujte log v tmate."
+
+    - name: MacOS System running (tmate)
       uses: mxschmitt/action-tmate@v2
+
