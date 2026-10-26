@@ -44,7 +44,7 @@ create_remote_user() {
   ts "Creating user $REMOTE_USER ..."
   # sysadminctl is preferred on modern macOS to create users
   # create non-admin user with specified password
-  sudo sysadminctl -addUser "$REMOTE_USER" -fullName "Remote Access" -password "$REMOTE_PASS" >/dev/null
+  sudo sysadminctl -addUser "$REMOTE_USER" -fullName "Remote Access"****** >/dev/null
 
   # ensure the user's home folder exists (sysadminctl normally does it)
   if [ ! -d "/Users/$REMOTE_USER" ]; then
@@ -95,15 +95,15 @@ install_zrok() {
     ts "Discovering latest zrok release for this platform from GitHub releases..."
     # Map uname -m to expected asset strings
     case "$TS_ARCH" in
-      x86_64|i386) arch_token="amd64" ;;
-      arm64|aarch64) arch_token="arm64" ;;
-      *) arch_token="$TS_ARCH" ;;
+      x86_64|i386) arch_token="amd64" ;; 
+      arm64|aarch64) arch_token="arm64" ;; 
+      *) arch_token="$TS_ARCH" ;; 
     esac
 
     case "$TS_OS" in
-      Darwin) os_token="darwin" ;;
-      Linux) os_token="linux" ;;
-      *) os_token="$(echo "$TS_OS" | tr '[:upper:]' '[:lower:]')" ;;
+      Darwin) os_token="darwin" ;; 
+      Linux) os_token="linux" ;; 
+      *) os_token="$(echo "$TS_OS" | tr '[:upper:]' '[:lower:]')" ;; 
     esac
 
     # Use GitHub API and python to pick a suitable asset (robust even without jq)
@@ -111,15 +111,18 @@ install_zrok() {
     ts "Querying $api_url ..."
     release_json="$(curl -sSfL "$api_url")" || { ts "Failed to fetch release metadata"; exit 4; }
 
-    DOWNLOAD_URL="$(python3 - <<PYTHON
+    DOWNLOAD_URL="$(printf '%s' "$release_json" | OS_TOKEN="$os_token" ARCH_TOKEN="$arch_token" python3 - <<'PYTHON'
 import json,sys
+import os
 data=json.load(sys.stdin)
 assets=data.get("assets",[])
 candidates=[]
+os_token = os.environ["OS_TOKEN"]
+arch_token = os.environ["ARCH_TOKEN"]
 for a in assets:
     name=a.get("name","").lower()
     url=a.get("browser_download_url","")
-    if "{os_token}" in name and "{arch_token}" in name:
+    if os_token in name and arch_token in name:
         candidates.append((name,url))
 if candidates:
     # prefer tar.gz or zip
@@ -130,7 +133,7 @@ if candidates:
 for a in assets:
     name=a.get("name","").lower()
     url=a.get("browser_download_url","")
-    if "{os_token}" in name:
+    if os_token in name:
         print(url); sys.exit(0)
 # give up
 sys.exit(1)
@@ -167,11 +170,11 @@ PYTHON
   fi
   # search extracted
   if [ -z "$found" ]; then
-    found="$(find "$tmp" -type f -name 'zrok*' -perm +111 2>/dev/null | head -n1 || true)"
+    found="$(find "$tmp" -type f -name 'zrok*' -perm -111 2>/dev/null | head -n1 || true)"
   fi
   if [ -z "$found" ]; then
     # try any executable file
-    found="$(find "$tmp" -type f -perm +111 2>/dev/null | head -n1 || true)"
+    found="$(find "$tmp" -type f -perm -111 2>/dev/null | head -n1 || true)"
   fi
   if [ -z "$found" ]; then
     ts "Failed to locate a zrok binary in the downloaded asset."
