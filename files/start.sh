@@ -1,27 +1,26 @@
 #!/usr/bin/env bash
 # start.sh
-# Automate: install zrok CLI (no Homebrew), configure macOS Remote Management for a runner user,
-# start a zrok tcp tunnel for Screen Sharing (5900) and keep it alive while tmate is running.
+# Automate: install ngrok CLI, configure macOS Remote Management for a runner user,
+# start an ngrok tcp tunnel for Screen Sharing (5900) and keep it alive while tmate is running.
 #
-# Usage: run inside the GitHub Actions macOS job. Provide ZROK_TOKEN (required) and REMOTE_PASS (recommended).
+# Usage: run inside the GitHub Actions macOS job. Provide NGROK_AUTHTOKEN (required) and REMOTE_PASS (recommended).
 # Optional env vars:
-#  - ZROK_TOKEN (required)         : zrok auth token (store as a secret)
-#  - REMOTE_USER (default: remote) : local macOS user to allow screen sharing
-#  - REMOTE_PASS                   : password for REMOTE_USER (if omitted a random password is generated)
-#  - VNC_PASSWORD                  : optional legacy VNC password (less secure)
-#  - ZROK_DOWNLOAD_URL             : optional full URL to zrok binary release asset (bypass auto-discovery)
-#  - ZROK_PORT (default: 5900)
+#  - NGROK_AUTHTOKEN (required)      : ngrok auth token (store as a secret)
+#  - REMOTE_USER (default: remote)   : local macOS user to allow screen sharing
+#  - REMOTE_PASS                      : password for REMOTE_USER (if omitted a random password is generated)
+#  - VNC_PASSWORD                     : optional legacy VNC password (less secure)
+#  - NGROK_DOWNLOAD_URL               : optional full URL to ngrok zip asset
+#  - NGROK_PORT (default: 5900)
 set -euo pipefail
 
 # --- Configuration / defaults ---
 REMOTE_USER="${REMOTE_USER:-remote}"
-ZROK_PORT="${ZROK_PORT:-5900}"
-ZROK_BIN="/usr/local/bin/zrok"
-ZROK_REPO="zrok-io/zrok"   # used to discover releases if ZROK_DOWNLOAD_URL not provided
+NGROK_PORT="${NGROK_PORT:-5900}"
+NGROK_BIN="/usr/local/bin/ngrok"
 
 # Validate required env
-if [ -z "${ZROK_TOKEN:-}" ]; then
-  echo "ERROR: ZROK_TOKEN not set. Set it as an environment variable or GitHub secret."
+if [ -z "${NGROK_AUTHTOKEN:-}" ]; then
+  echo "ERROR: NGROK_AUTHTOKEN not set. Set it as an environment variable or GitHub secret."
   exit 2
 fi
 
@@ -42,11 +41,9 @@ create_remote_user() {
   fi
 
   ts "Creating user $REMOTE_USER ..."
-  # sysadminctl is preferred on modern macOS to create users
-  # create non-admin user with specified password
-  sudo sysadminctl -addUser "$REMOTE_USER" -fullName "Remote Access"****** >/dev/null
+  sudo sysadminctl -addUser "$REMOTE_USER" -fullName "Remote Access" >/dev/null
+  sudo dscl . -passwd "/Users/$REMOTE_USER" "$REMOTE_PASS" >/dev/null
 
-  # ensure the user's home folder exists (sysadminctl normally does it)
   if [ ! -d "/Users/$REMOTE_USER" ]; then
     sudo createhomedir -c -u "$REMOTE_USER" >/dev/null || true
   fi
@@ -63,25 +60,21 @@ enable_remote_management() {
     exit 3
   fi
 
-  # Activate Remote Management, enable access, grant privileges to the specific user, restart the agent
-  # Using -privs -all here for simplicity in CI. For stricter security, limit privileges.
   sudo "$KICKSTART" -activate -configure -access -on -users "$REMOTE_USER" -privs -all -restart -agent
   ts "Remote Management enabled for $REMOTE_USER."
 
-  # Optionally enable legacy VNC password (less secure, 8-char limit historically). Only set if VNC_PASSWORD provided
   if [ -n "${VNC_PASSWORD:-}" ]; then
     ts "Configuring legacy VNC password (less secure) ..."
-    # setvnclegacy and setvncpw apply the VNC-compatible password (if supported)
     sudo "$KICKSTART" -configure -clientopts -setvnclegacy -vnclegacy yes \
       -setvncpw -vncpw "$VNC_PASSWORD"
     ts "Legacy VNC password configured."
   fi
 }
 
-# --- 3) Install zrok CLI without Homebrew ---
-install_zrok() {
-  if [ -x "$ZROK_BIN" ]; then
-    ts "zrok already installed at $ZROK_BIN"
+# --- 3) Install ngrok CLI without Homebrew ---
+install_ngrok() {
+  if [ -x "$NGROK_BIN" ]; then
+    ts "ngrok already installed at $NGROK_BIN"
     return
   fi
 
@@ -89,134 +82,97 @@ install_zrok() {
   TS_OS="$(uname -s)"
   ts "Runner OS: $TS_OS, arch: $TS_ARCH"
 
-  DOWNLOAD_URL="${ZROK_DOWNLOAD_URL:-}"
-
+  DOWNLOAD_URL="${NGROK_DOWNLOAD_URL:-}"
   if [ -z "$DOWNLOAD_URL" ]; then
-    ts "Discovering latest zrok release for this platform from GitHub releases..."
-    # Map uname -m to expected asset strings
-    case "$TS_ARCH" in
-      x86_64|i386) arch_token="amd64" ;; 
-      arm64|aarch64) arch_token="arm64" ;; 
-      *) arch_token="$TS_ARCH" ;; 
-    esac
-
     case "$TS_OS" in
-      Darwin) os_token="darwin" ;; 
-      Linux) os_token="linux" ;; 
-      *) os_token="$(echo "$TS_OS" | tr '[:upper:]' '[:lower:]')" ;; 
+      Darwin) os_token="darwin" ;;
+      Linux) os_token="linux" ;;
+      *) ts "Unsupported OS: $TS_OS"; exit 4 ;;
     esac
 
-    # Use GitHub API and python to pick a suitable asset (robust even without jq)
-    api_url="https://api.github.com/repos/${ZROK_REPO}/releases/latest"
-    ts "Querying $api_url ..."
-    release_json="$(curl -sSfL "$api_url")" || { ts "Failed to fetch release metadata"; exit 4; }
+    case "$TS_ARCH" in
+      x86_64|i386) arch_token="amd64" ;;
+      arm64|aarch64) arch_token="arm64" ;;
+      *) ts "Unsupported arch: $TS_ARCH"; exit 4 ;;
+    esac
 
-    DOWNLOAD_URL="$(printf '%s' "$release_json" | OS_TOKEN="$os_token" ARCH_TOKEN="$arch_token" python3 - <<'PYTHON'
-import json,sys
-import os
-data=json.load(sys.stdin)
-assets=data.get("assets",[])
-candidates=[]
-os_token = os.environ["OS_TOKEN"]
-arch_token = os.environ["ARCH_TOKEN"]
-for a in assets:
-    name=a.get("name","").lower()
-    url=a.get("browser_download_url","")
-    if os_token in name and arch_token in name:
-        candidates.append((name,url))
-if candidates:
-    # prefer tar.gz or zip
-    candidates.sort()
-    print(candidates[-1][1])
-    sys.exit(0)
-# fallback: try any asset containing os_token
-for a in assets:
-    name=a.get("name","").lower()
-    url=a.get("browser_download_url","")
-    if os_token in name:
-        print(url); sys.exit(0)
-# give up
-sys.exit(1)
-PYTHON
-)"
-    if [ -z "$DOWNLOAD_URL" ]; then
-      ts "Could not auto-discover a zrok asset for ${os_token}/${arch_token}. Provide ZROK_DOWNLOAD_URL manually."
-      exit 5
-    fi
+    DOWNLOAD_URL="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-${os_token}-${arch_token}.zip"
   fi
 
-  ts "Downloading zrok from: $DOWNLOAD_URL"
-  tmp="/tmp/zrok_download.$$"
+  ts "Downloading ngrok from: $DOWNLOAD_URL"
+  tmp="/tmp/ngrok_download.$$"
   mkdir -p "$tmp"
-  curl -sSfL "$DOWNLOAD_URL" -o "$tmp/asset" || { ts "Download failed"; exit 6; }
+  curl -sSfL "$DOWNLOAD_URL" -o "$tmp/ngrok.zip" || { ts "Download failed"; exit 5; }
 
-  # Try to extract a single binary from archive or treat as raw binary
-  file "$tmp/asset" | grep -q 'Zip archive' && {
-    ts "Extracting zip ..."
-    unzip -q "$tmp/asset" -d "$tmp"
-  } || true
-  file "$tmp/asset" | grep -q 'gzip compressed' && {
-    ts "Extracting tar.gz ..."
-    tar -xzf "$tmp/asset" -C "$tmp" || true
-  } || true
+  unzip -q "$tmp/ngrok.zip" -d "$tmp" || { ts "Failed to extract ngrok"; exit 6; }
 
-  # Find a zrok binary inside tmp dir or treat asset as binary
-  found=""
-  if [ -f "$tmp/asset" ]; then
-    # check if it's executable single binary
-    if head -c 4 "$tmp/asset" | grep -q "ELF\|MZ\|xar!" || file "$tmp/asset" | grep -q 'Mach-O'; then
-      found="$tmp/asset"
-    fi
-  fi
-  # search extracted
-  if [ -z "$found" ]; then
-    found="$(find "$tmp" -type f -name 'zrok*' -perm -111 2>/dev/null | head -n1 || true)"
-  fi
-  if [ -z "$found" ]; then
-    # try any executable file
-    found="$(find "$tmp" -type f -perm -111 2>/dev/null | head -n1 || true)"
-  fi
-  if [ -z "$found" ]; then
-    ts "Failed to locate a zrok binary in the downloaded asset."
+  if [ ! -f "$tmp/ngrok" ]; then
+    ts "Failed to locate ngrok binary in archive."
     ls -la "$tmp" || true
     exit 7
   fi
 
-  ts "Installing zrok binary from $found to $ZROK_BIN"
-  sudo mv "$found" "$ZROK_BIN"
-  sudo chmod 755 "$ZROK_BIN"
-  ts "zrok installed at $ZROK_BIN"
+  ts "Installing ngrok binary to $NGROK_BIN"
+  sudo mv "$tmp/ngrok" "$NGROK_BIN"
+  sudo chmod 755 "$NGROK_BIN"
+  ts "ngrok installed at $NGROK_BIN"
   rm -rf "$tmp"
 }
 
-# --- 4) start zrok (background) and output connection info ---
-start_zrok() {
-  # We export the token in the env for the zrok process. If the zrok CLI supports a different env var name,
-  # set it before running. We preserve the token in memory only for the launched process.
-  ts "Starting zrok tcp tunnel on local port ${ZROK_PORT} ..."
-  export ZROK_TOKEN="$ZROK_TOKEN"
-  # Start with nohup so it survives the shell exiting inside GH Actions step if needed; capture PID.
-  nohup "$ZROK_BIN" tcp "$ZROK_PORT" &> /tmp/zrok.log &
-  ZROK_PID=$!
-  echo "$ZROK_PID" > /tmp/zrok.pid
-  ts "zrok started (pid: $ZROK_PID). Logs at /tmp/zrok.log"
-  # Wait briefly and try to show the connection endpoint (zrok usually prints it to stdout -> /tmp/zrok.log)
-  sleep 2
-  if grep -Eo '([a-z0-9\-]+\.tcp\.zrok\.io:[0-9]+)' /tmp/zrok.log | head -n1 >/dev/null 2>&1; then
-    endpoint="$(grep -Eo '([a-z0-9\-]+\.tcp\.zrok\.io:[0-9]+)' /tmp/zrok.log | head -n1)"
-    ts "Remote endpoint: $endpoint  (use vnc://$endpoint to connect with a VNC client)"
-  else
-    ts "Could not parse endpoint from zrok logs yet. Inspect /tmp/zrok.log for details."
-    tail -n 50 /tmp/zrok.log || true
+print_ngrok_endpoint() {
+  if endpoint="$(python3 - <<'PYTHON'
+import json,sys,urllib.request
+try:
+    with urllib.request.urlopen('http://127.0.0.1:4040/api/tunnels', timeout=2) as r:
+        data = json.load(r)
+    for t in data.get('tunnels', []):
+        u = t.get('public_url', '')
+        if u.startswith('tcp://'):
+            print(u)
+            sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+PYTHON
+)"; then
+    ts "Remote endpoint: ${endpoint#tcp://}  (use vnc://${endpoint#tcp://} to connect with a VNC client)"
+    return 0
   fi
+
+  if grep -Eo 'tcp://[^[:space:]]+' /tmp/ngrok.log | head -n1 >/dev/null 2>&1; then
+    endpoint="$(grep -Eo 'tcp://[^[:space:]]+' /tmp/ngrok.log | head -n1)"
+    ts "Remote endpoint: ${endpoint#tcp://}  (use vnc://${endpoint#tcp://} to connect with a VNC client)"
+    return 0
+  fi
+
+  return 1
 }
 
-# --- 5) Monitor loop: keep zrok alive while tmate is running ---
+# --- 4) start ngrok (background) and output connection info ---
+start_ngrok() {
+  ts "Configuring ngrok authtoken ..."
+  "$NGROK_BIN" config add-authtoken "$NGROK_AUTHTOKEN" >/dev/null
+
+  ts "Starting ngrok tcp tunnel on local port ${NGROK_PORT} ..."
+  nohup "$NGROK_BIN" tcp "$NGROK_PORT" --log stdout &> /tmp/ngrok.log &
+  NGROK_PID=$!
+  echo "$NGROK_PID" > /tmp/ngrok.pid
+  ts "ngrok started (pid: $NGROK_PID). Logs at /tmp/ngrok.log"
+
+  for _ in $(seq 1 20); do
+    if print_ngrok_endpoint; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  ts "Could not parse endpoint from ngrok yet. Inspect /tmp/ngrok.log for details."
+  tail -n 50 /tmp/ngrok.log || true
+}
+
+# --- 5) Monitor loop: keep ngrok alive while tmate is running ---
 monitor_while_tmate() {
-  ts "Entering monitor loop: will keep zrok running while a tmate process exists."
-  # Wait until a tmate process appears (if none are running yet) OR exit when none ever appear?
-  # In typical GH Actions flow, tmate might be started by another step after this script.
-  # We'll wait up to 120 seconds for tmate to appear; if it doesn't, we still run zrok for immediate use.
+  ts "Entering monitor loop: will keep ngrok running while a tmate process exists."
   wait_seconds=0
   max_wait=120
   while [ $wait_seconds -lt $max_wait ]; do
@@ -228,24 +184,21 @@ monitor_while_tmate() {
     wait_seconds=$((wait_seconds + 1))
   done
 
-  # If tmate never started, we keep zrok running until this job ends; but also still supervise.
   while true; do
-    # If tmate is gone -> stop zrok and exit
     if ! pgrep -x tmate >/dev/null 2>&1; then
-      ts "No tmate process found. Terminating zrok and exiting."
-      if [ -f /tmp/zrok.pid ]; then
-        kill "$(cat /tmp/zrok.pid)" >/dev/null 2>&1 || true
-        rm -f /tmp/zrok.pid || true
+      ts "No tmate process found. Terminating ngrok and exiting."
+      if [ -f /tmp/ngrok.pid ]; then
+        kill "$(cat /tmp/ngrok.pid)" >/dev/null 2>&1 || true
+        rm -f /tmp/ngrok.pid || true
       else
-        pkill -x zrok >/dev/null 2>&1 || true
+        pkill -x ngrok >/dev/null 2>&1 || true
       fi
       break
     fi
 
-    # If zrok died, restart it
-    if ! pgrep -x zrok >/dev/null 2>&1; then
-      ts "zrok process not found - restarting..."
-      start_zrok
+    if ! pgrep -x ngrok >/dev/null 2>&1; then
+      ts "ngrok process not found - restarting..."
+      start_ngrok
     fi
     sleep 5
   done
@@ -256,8 +209,8 @@ ts "Starting automation..."
 
 create_remote_user
 enable_remote_management
-install_zrok
-start_zrok
+install_ngrok
+start_ngrok
 monitor_while_tmate
 
 ts "Script finished."

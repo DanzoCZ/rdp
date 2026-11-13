@@ -1,4 +1,4 @@
-name: Remote Access (macOS runner with zrok + tmate)
+name: Remote Access (macOS runner with ngrok + tmate)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 180
     env:
-      ZROK_PORT: 5900
+      NGROK_PORT: 5900
 
     steps:
       - name: Checkout
@@ -18,10 +18,10 @@ jobs:
         run: |
           chmod +x ./files/start.sh
 
-      - name: Start zrok + enable Screen Sharing (background)
+      - name: Start ngrok + enable Screen Sharing (background)
         # We start the script in the background. The script will wait for tmate (up to 120s)
         env:
-          ZROK_TOKEN: ${{ secrets.ZROK_TOKEN }}
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
           REMOTE_PASS: ${{ secrets.REMOTE_PASS }}
           VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
           REMOTE_USER: remote
@@ -36,13 +36,13 @@ jobs:
           # defaults are fine; this action prints tmate session details to workflow logs
           continue-on-error: false
 
-      - name: Collect zrok endpoint and logs
+      - name: Collect ngrok endpoint and logs
         if: always()
         run: |
-          echo "==== /tmp/zrok.log ===="
-          sudo cat /tmp/zrok.log || true
+          echo "==== /tmp/ngrok.log ===="
+          sudo cat /tmp/ngrok.log || true
           echo "==== /tmp/start.sh.log (last 200 lines) ===="
           tail -n 200 /tmp/start.sh.log || true
-          if [ -f /tmp/zrok.pid ]; then
-            echo "zrok pid: $(cat /tmp/zrok.pid)"
+          if [ -f /tmp/ngrok.pid ]; then
+            echo "ngrok pid: $(cat /tmp/ngrok.pid)"
           fi
