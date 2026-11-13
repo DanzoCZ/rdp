@@ -3,6 +3,9 @@ name: Remote Access (macOS runner with ngrok + tmate)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   remote-access:
     runs-on: macos-latest
