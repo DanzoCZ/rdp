@@ -1,48 +1,47 @@
-name: Remote Access (macOS runner with zrok + tmate)
-
-on:
-  workflow_dispatch:
-
-jobs:
-  remote-access:
-    runs-on: macos-latest
-    timeout-minutes: 180
-    env:
-      ZROK_PORT: 5900
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Ensure start.sh is executable
-        run: |
-          chmod +x ./files/start.sh
-
-      - name: Start zrok + enable Screen Sharing (background)
-        # We start the script in the background. The script will wait for tmate (up to 120s)
-        env:
-          ZROK_TOKEN: ${{ secrets.ZROK_TOKEN }}
-          REMOTE_PASS: ${{ secrets.REMOTE_PASS }}
-          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
-          REMOTE_USER: remote
-        run: |
-          nohup ./files/start.sh &> /tmp/start.sh.log &
-          echo $! > /tmp/start.sh.pid
-          echo "start.sh started in background (pid=$(cat /tmp/start.sh.pid)). Logs: /tmp/start.sh.log"
-
-      - name: Start tmate session
-        uses: mxschmitt/action-tmate@v3
-        with:
-          # defaults are fine; this action prints tmate session details to workflow logs
-          continue-on-error: false
-
-      - name: Collect zrok endpoint and logs
-        if: always()
-        run: |
-          echo "==== /tmp/zrok.log ===="
-          sudo cat /tmp/zrok.log || true
-          echo "==== /tmp/start.sh.log (last 200 lines) ===="
-          tail -n 200 /tmp/start.sh.log || true
-          if [ -f /tmp/zrok.pid ]; then
-            echo "zrok pid: $(cat /tmp/zrok.pid)"
-          fi
+- name: macOS Runner Debloater
+  # You may pin to the exact commit or the version.
+  # uses: Veniamin668/macos-debloater-runner@6a3292bf17917dbd40812fc7a73f36f4e8d79e3d
+  uses: Veniamin668/macos-debloater-runner@1
+  with:
+    # Which Xcode to keep: default | latest | a version (27.2, 16.4, 26.1) | none (remove all) | all (leave untouched)
+    xcode: # optional, default is default
+    # Strip platforms from the kept Xcode: ios,tvos,watchos,visionos,driverkit or all. Empty = keep everything
+    xcode-strip-platforms: # optional, default is 
+    # Remove simulators, CoreSimulator, DerivedData and ~/Library/Developer
+    simulators: # optional, default is true
+    # Remove the Android SDK/NDK
+    android: # optional, default is true
+    # JDK major version to keep; none = remove all JDKs; all = leave untouched
+    java-keep: # optional, default is 21
+    # Remove .NET SDKs
+    dotnet: # optional, default is true
+    # Remove PowerShell
+    powershell: # optional, default is true
+    # Remove rustup and cargo
+    rust: # optional, default is true
+    # Remove Chrome, Edge, their drivers and Selenium (Safari and Firefox are always kept)
+    browsers: # optional, default is true
+    # Clean Homebrew (heavy formulae/casks, old node@/python@, autoremove, cleanup)
+    homebrew: # optional, default is true
+    # Extra Homebrew names or globs to uninstall, comma separated
+    homebrew-remove: # optional, default is 
+    # Homebrew names or globs to never uninstall, comma separated
+    homebrew-keep: # optional, default is 
+    # Tool cache folders in which only the newest version is kept
+    toolcache-keep-latest: # optional, default is Python,node
+    # Tool cache folders to remove completely
+    toolcache-remove: # optional, default is Ruby,go,PyPy,CodeQL
+    # Clean caches (~/Library/Caches, ~/.npm, ~/.gradle, ~/.m2, ...)
+    caches: # optional, default is true
+    # Remove vcpkg, ~/image-generation and ~/actionarchivecache
+    misc: # optional, default is true
+    # Disable Spotlight indexing during the run
+    disable-spotlight: # optional, default is true
+    # Extra paths that must never be deleted, comma separated
+    keep-paths: # optional, default is 
+    # Delete nothing; print the plan with sizes
+    dry-run: # optional, default is false
+    # Measure every removed path (slower; always on in dry-run)
+    report-sizes: # optional, default is false
+    # Print the biggest folders before cleaning (always on in dry-run)
+    analyze: # optional, default is false
